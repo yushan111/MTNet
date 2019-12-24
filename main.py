@@ -136,7 +136,7 @@ def run_one_config(config):
 
     # build model
     with tf.Session() as sess:
-        #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
+        # sess = tf_debug.LocalCLIDebugWrapperSession(sess)
         model = MTNet(config)
         saver = tf.train.Saver()
         # data process
