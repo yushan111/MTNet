@@ -1,4 +1,5 @@
 from models.MTNet import *
+from models.MTNet_keras import MTNetKeras
 from configs.config import *
 from preprocess.get_data import *
 
@@ -17,9 +18,14 @@ from tensorflow.python import debug as tf_debug
 SCORE_TYPES = [['MAE', 'RMSE'], ['CORR', 'RSE']]
 
 
-CONFIG = BJpmConfig
-DS_HANDLER = BJPMDataset
-score_type_index = 0
+# CONFIG = BJpmConfig
+# DS_HANDLER = BJPMDataset
+# score_type_index = 0
+
+CONFIG = TaxiNYConfig
+DS_HANDLER = TaxiNYDataset
+score_type_index = 1
+
 
 is_train = True
 
@@ -126,8 +132,30 @@ def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num
         return loss, corr, rse
 
 
+def evaluate(model, val_x, y_real, ds_handler, score_type_index):
+    y_pred = model.predict(val_x)
+    # # inverse norm
+    # print("the shape of y_pred is", y_pred.shape)
+    # print("the shape of y_real is", y_real.shape)
+
+    y_pred = np.reshape(y_pred, [-1, model.config.K])
+    y_real = np.reshape(y_real, [-1, model.config.K])
+
+    y_pred = ds_handler.inverse_transform(y_pred)
+    y_real = ds_handler.inverse_transform(y_real)
+
+    if score_type_index == 0:
+        mae = np.mean(abs(np.subtract(y_pred, y_real)))
+        rmse = np.sqrt(np.mean(np.subtract(y_pred, y_real) ** 2))
+        return mae, rmse
+    else:
+        rse = calc_rse(y_real, y_pred)
+        corr = calc_corr(y_real, y_pred)
+        return corr, rse
+
+
 def run_one_config(config):
-    epochs = 300
+    epochs = 50
 
     # learning rate decay
     max_lr = 0.003
@@ -183,6 +211,45 @@ def run_one_config(config):
     # free default graph
     tf.reset_default_graph()
 
+
+def run_keras(config):
+    epochs = 50
+    # learning rate decay
+    max_lr = 0.003
+    min_lr = 0.0001
+    decay_epochs = 60
+
+    # build model
+    model = MTNetKeras()
+    # data process
+    ds_handler = DS_HANDLER(config)
+    train_data = ds_handler.get_all_data(config, 'T')
+    valid_data = ds_handler.get_all_data(config, 'V')
+
+    # generate log and model stored paths
+    log_path = make_log_dir(config, ds_handler)
+    model_path = make_model_path(config, ds_handler)
+
+    print('----------Train Config:', make_config_string(config), '. Total epochs:', epochs)
+    score1_name, score2_name = SCORE_TYPES[score_type_index]
+    best_score = float('inf')
+    for i in range(epochs):
+        # decay lr
+        config.lr = min_lr + (max_lr - min_lr) * math.exp(-i / decay_epochs)
+        model.fit_eval(train_data[0], train_data[1], validation_data=valid_data,
+                       epochs=1, config=config)
+        if i % 5 == 0:
+            score1, score2 = evaluate(model, valid_data[0], valid_data[1], ds_handler,
+                                      score_type_index)
+            if best_score > score2:
+                best_score = score2
+                # save model
+                # model.save(model_path)
+                print('Epoch', i, score1_name, ':', score1, score2_name, ':', score2)
+
+    print('---------Best score:', score2_name, ':', best_score)
+
+
 if __name__ == '__main__':
     config = CONFIG()
     for en_conv_hidden_size in [32, 64]:
@@ -190,4 +257,5 @@ if __name__ == '__main__':
         for en_rnn_hidden_sizes in [ [32, 32], [32, 64]]:
             config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
-            run_one_config(config)
+            run_keras(config)
+            # run_one_config(config)

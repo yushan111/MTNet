@@ -37,6 +37,22 @@ class Dataset(object):
 
         return np.array(records)
 
+    def roll_data(self, ds, config):
+        '''
+        :param ds: dataset <length, columns>
+        :param config:
+        :return: <record_nums, record_len>
+        '''
+        records = []
+        one_record_x_len = config.T * (config.n + 1)
+        print("one_record_len is ", one_record_x_len)
+        for i in range(one_record_x_len, ds.shape[0] - config.horizon + 1):
+            one_record = (ds[i - one_record_x_len: i, :],
+                          np.expand_dims(ds[i + config.horizon - 1, :], axis=0))
+            record_arr = np.concatenate(one_record, axis=0)
+            records.append(record_arr)
+        return np.array(records)
+
     def get_batch_data(self, records, config):
         '''
         Get X <batch_size, n, T, D>, Q <batch_size, T, D>， Y <batch_size, K>
@@ -104,6 +120,29 @@ class Dataset(object):
 
         return all_batch_data
 
+    def get_all_data(self, config, ds_type='T'):
+        is_shuffle = False
+        if ds_type == 'T':
+            ds = self.train_ds
+            is_shuffle = True
+        elif ds_type == 'V':
+            ds = self.valid_ds
+        elif ds_type == 'E':
+            ds = self.test_ds
+        else:
+            raise RuntimeError("Unknown dataset type['T','V', 'E']:", ds_type)
+
+        records = self.roll_data(ds, config)
+        print("records shape is ", records.shape)
+        if is_shuffle:
+            np.random.shuffle(records)
+        records_x = records[:, :-1]
+        records_y = records[:, -1]
+        print("the shape of records_x is ", records_x.shape)
+        print("the shape of records_y is ", records_y.shape)
+
+        return records_x, records_y
+
     def divide_ds(self, config, ratios = [0.8, 0.9]):
         '''
 
@@ -138,7 +177,7 @@ class TaxiNYDataset(Dataset):
     def __init__(self, config):
         Dataset.__init__(self, config)
 
-        self.train_ds, self.valid_ds = self.divide_ds(self.dataset, [0.9])
+        self.train_ds, self.valid_ds = self.divide_ds(config, [0.9])
         print('-Train dataset shape:', self.train_ds.shape)
         print('-Valid dataset shape:', self.valid_ds.shape)
 
@@ -225,6 +264,7 @@ class BJPMDataset(Dataset):
         :return:
         '''
         i = len(records)
+        print(records.shape)
         while i > 0:
             start_index = i - config.batch_size
             if start_index < 0:
