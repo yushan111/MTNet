@@ -101,7 +101,7 @@ class Dataset(object):
         is_shuffle = False
         if ds_type == 'T':
             ds = self.train_ds
-            is_shuffle = True
+            is_shuffle = False
         elif ds_type == 'V':
             ds = self.valid_ds
         elif ds_type == 'E':
@@ -124,7 +124,7 @@ class Dataset(object):
         is_shuffle = False
         if ds_type == 'T':
             ds = self.train_ds
-            is_shuffle = True
+            is_shuffle = False
         elif ds_type == 'V':
             ds = self.valid_ds
         elif ds_type == 'E':
@@ -237,6 +237,7 @@ class BJPMDataset(Dataset):
             data[i] = scaler.fit_transform(data[i]).tolist()
             scalers.append(scaler)
 
+
         # <length, columns>
         data = np.transpose(np.squeeze(data, axis=-1))
         return np.array(data), scalers
@@ -264,7 +265,6 @@ class BJPMDataset(Dataset):
         :return:
         '''
         i = len(records)
-        print(records.shape)
         while i > 0:
             start_index = i - config.batch_size
             if start_index < 0:
@@ -276,6 +276,29 @@ class BJPMDataset(Dataset):
             yield x, q, y
 
             i = start_index
+
+    def get_all_data(self, config, ds_type = 'T'):
+        is_shuffle = False
+        if ds_type == 'T':
+            ds = self.train_ds
+            is_shuffle = False
+        elif ds_type == 'V':
+            ds = self.valid_ds
+        elif ds_type == 'E':
+            ds = self.test_ds
+        else:
+            raise RuntimeError("Unknown dataset type['T','V', 'E']:", ds_type)
+
+        records = self.process2records(ds, config)
+        print("records shape is ", records.shape)
+        if is_shuffle:
+            np.random.shuffle(records)
+        records_x = np.reshape(records[:, :-1], [-1, (1 + config.n) * config.T, config.D])
+        records_y = np.reshape(records[:, -1], [-1, 1])
+        print("the shape of records_x is ", records_x.shape)
+        print("the shape of records_y is ", records_y.shape)
+
+        return records_x, records_y
 
     def inverse_transform(self, y_scaled):
         '''
@@ -321,7 +344,7 @@ class BikeNYCDataset(Dataset):
         Dataset.__init__(self, config)
 
         self.train_ds, self.valid_ds = self.divide_ds(config, [0.8])
-        print('-Train dataset shape:', self.train_ds.shape)
+        ('-Train dataset shape:', self.train_ds.shape)
         print('-Valid dataset shape:', self.valid_ds.shape)
 
     def get_dataset(self):

@@ -1,4 +1,5 @@
-from models.MTNet import *
+from models.MTNet_keras_1 import MTNet
+# from models.MTNet import *
 from models.MTNet_keras import MTNetKeras
 from configs.config import *
 from preprocess.get_data import *
@@ -18,13 +19,13 @@ from tensorflow.python import debug as tf_debug
 SCORE_TYPES = [['MAE', 'RMSE'], ['CORR', 'RSE']]
 
 
-# CONFIG = BJpmConfig
-# DS_HANDLER = BJPMDataset
-# score_type_index = 0
+CONFIG = BJpmConfig
+DS_HANDLER = BJPMDataset
+score_type_index = 0
 
-CONFIG = TaxiNYConfig
-DS_HANDLER = TaxiNYDataset
-score_type_index = 1
+# CONFIG = TaxiNYConfig
+# DS_HANDLER = TaxiNYDataset
+# score_type_index = 1
 
 
 is_train = True
@@ -84,6 +85,15 @@ def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num
     y_real_list = []
     loss_list = []
 
+    # step = 0
+    # loss = 0.10731270909309387
+    # loss = 0.1073080450296402
+    # predict = 0.3857574462890625
+    # loss_new, pred_new = run_func(batch_data[step], sess)
+    # assert np.equal(loss, loss_new), "new_loss is {}, which is not equal to {}".format(loss_new, loss)
+    # assert np.equal(predict, pred_new[0][0]), "new_pred is {}, which is not equal to {}".format(pred_new, predict)
+    # exit(0)
+
     for ds in batch_data:
         loss, pred = run_func(ds, sess)
 
@@ -132,7 +142,20 @@ def run_one_epoch(sess, model, batch_data, summary_writer, ds_handler, epoch_num
         return loss, corr, rse
 
 
-def evaluate(model, val_x, y_real, ds_handler, score_type_index):
+def evaluate(model, val_data, ds_handler, score_type_index):
+    val_x = val_data[0]
+    y_real = val_data[1]
+    # val_x = []
+    # val_y = []
+    # val_q = []
+    # for ds in val_batch_data:
+    #     val_x.append(ds[0])
+    #     val_q.append(ds[1])
+    #     val_y.append(ds[2])
+    #     # val_y.append(ds[1])
+    # val_x = np.concatenate(val_x), np.concatenate(val_q)
+    # y_real = np.concatenate(val_y)
+
     y_pred = model.predict(val_x)
     # # inverse norm
     # print("the shape of y_pred is", y_pred.shape)
@@ -158,8 +181,8 @@ def run_one_config(config):
     epochs = 50
 
     # learning rate decay
-    max_lr = 0.003
-    min_lr = 0.0001
+    max_lr = 0.001
+    min_lr = 0.001
     decay_epochs = 60
 
     # build model
@@ -198,13 +221,14 @@ def run_one_config(config):
             # train one epoch
             run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
             # evaluate
-            if i % 5 == 0:
+            # print(i)
+            if (i + 1) % 1 == 0:
                 loss, scope1, score2 = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
                 if best_score > score2:
                     best_score = score2
                     # save model
-                    saver.save(sess, model_path)
-                    print('Epoch', i, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
+                    # saver.save(sess, model_path)
+                print('Epoch', i + 1, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
 
         print('---------Best score:', score2_name, ':', best_score)
 
@@ -215,16 +239,33 @@ def run_one_config(config):
 def run_keras(config):
     epochs = 50
     # learning rate decay
-    max_lr = 0.003
-    min_lr = 0.0001
+    max_lr = 0.001
+    min_lr = 0.001
     decay_epochs = 60
 
     # build model
     model = MTNetKeras()
     # data process
     ds_handler = DS_HANDLER(config)
-    train_data = ds_handler.get_all_data(config, 'T')
-    valid_data = ds_handler.get_all_data(config, 'V')
+    train_batch_data = ds_handler.get_all_batch_data(config, 'T')
+    valid_batch_data = ds_handler.get_all_batch_data(config, 'V')
+    def get_data(batch_data):
+        x = []
+        q = []
+        y = []
+        for ds in batch_data:
+            x.append(ds[0])
+            q.append(ds[1])
+            y.append(ds[2])
+        input_x = np.concatenate(x)
+        input_q = np.concatenate(q)
+        input_y = np.concatenate(y)
+        return input_x, input_q, input_y
+    train_x, train_q, train_y = get_data(train_batch_data)
+    val_x, val_q, val_y = get_data(valid_batch_data)
+
+    # train_data = ds_handler.get_all_data(config, 'T')
+    # valid_data = ds_handler.get_all_data(config, 'V')
 
     # generate log and model stored paths
     log_path = make_log_dir(config, ds_handler)
@@ -233,29 +274,34 @@ def run_keras(config):
     print('----------Train Config:', make_config_string(config), '. Total epochs:', epochs)
     score1_name, score2_name = SCORE_TYPES[score_type_index]
     best_score = float('inf')
-    for i in range(epochs):
+    for i in range(epochs//5):
         # decay lr
         config.lr = min_lr + (max_lr - min_lr) * math.exp(-i / decay_epochs)
-        model.fit_eval(train_data[0], train_data[1], validation_data=valid_data,
-                       epochs=1, config=config)
-        if i % 5 == 0:
-            score1, score2 = evaluate(model, valid_data[0], valid_data[1], ds_handler,
-                                      score_type_index)
-            if best_score > score2:
-                best_score = score2
-                # save model
-                # model.save(model_path)
-                print('Epoch', i, score1_name, ':', score1, score2_name, ':', score2)
+        val_loss = model.fit_eval([train_x, train_q], train_y,
+                                  validation_data=([val_x, val_q], val_y),
+                                  epochs=5, config=config)
+        score1, score2 = evaluate(model, ([train_x, train_q], train_y), ds_handler,
+                                  score_type_index)
+        if best_score > score2:
+            best_score = score2
+            # save model
+            # model.save(model_path)
+            print('Epoch', (i + 1)*5, 'Test Loss:', val_loss,
+                  score1_name, ':', score1,
+                  score2_name, ':', score2)
 
     print('---------Best score:', score2_name, ':', best_score)
 
 
 if __name__ == '__main__':
+    # tf.random.set_random_seed(0)
+    # np.random.seed(0)
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
     config = CONFIG()
     for en_conv_hidden_size in [32, 64]:
         config.en_conv_hidden_size = en_conv_hidden_size
-        for en_rnn_hidden_sizes in [ [32, 32], [32, 64]]:
+        for en_rnn_hidden_sizes in [[32, 32], [32, 64]]:
             config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
-            run_keras(config)
-            # run_one_config(config)
+            # run_keras(config)
+            run_one_config(config)

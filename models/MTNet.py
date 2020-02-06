@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+import time
 
 class MTNet:
     def __init__(self, config, scope='MTNet'):
@@ -94,6 +94,7 @@ class MTNet:
         statistics_vars_initializer = tf.variables_initializer(var_list=statistics_vars)
 
         loss = tf.losses.absolute_difference(Y, y_pred)
+
         with tf.name_scope('Train'):
             train_op = tf.train.AdamOptimizer(lr).minimize(loss)
 
@@ -225,12 +226,22 @@ class MTNet:
 
     def train(self, one_batch, sess):
         fd = self.get_feed_dict(one_batch, True)
+        # print(fd[self.X].shape)
+        # print(fd[self.Q].shape)
+        # print(fd[self.Y].shape)
+        #
+        # print(fd[self.X][0,0,0])
+        # print(fd[self.Q][0,0])
+        # print(fd[self.Y][0])
+        # exit(0)
+        st = time.time()
         _, loss, pred = sess.run([self.train_op, self.loss, self.y_pred], feed_dict=fd)
         sess.run(self.summary_updates, feed_dict=fd)
         return loss, pred
 
     def predict(self, one_batch, sess):
         fd = self.get_feed_dict(one_batch, False)
+        st = time.time()
         loss, pred = sess.run([self.loss, self.y_pred], feed_dict=fd)
         sess.run(self.summary_updates, feed_dict=fd)
         return loss, pred

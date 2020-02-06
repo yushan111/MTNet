@@ -296,6 +296,95 @@ class AttentionRNNWrapper(Wrapper):
         return dict(list(base_config.items()) + list(config.items()))
 
 
+class AttentionRNN(Layer):
+    def __init__(self, hidden_sizes, input_keep_prob, output_keep_prob, num, batch_size, Tc, **kwargs):
+        super(AttentionRNN, self).__init__(**kwargs)
+        # # tensorflow
+        # rnns = [tf.nn.rnn_cell.GRUCell(h_size, activation=tf.nn.relu) for h_size in
+        #         hidden_sizes]
+        # # dropout
+        # if input_keep_prob < 1 or output_keep_prob < 1:
+        #     rnns = [tf.nn.rnn_cell.DropoutWrapper(rnn,
+        #                                           input_keep_prob=input_keep_prob,
+        #                                           output_keep_prob=output_keep_prob)
+        #             for rnn in rnns]
+        #
+        # if len(rnns) > 1:
+        #     self.rnns = tf.nn.rnn_cell.MultiRNNCell(rnns)
+        # else:
+        #     self.rnns = rnns[0]
+        # keras
+        rnn_cells = [GRUCell(h_size, activation="relu", dropout=1 - input_keep_prob)
+                     for h_size in hidden_sizes]
+        # output dropout of GRUCell is omitted since the output_keep_prob is 1 in all configs.
+        self.rnns = StackedRNNCells(rnn_cells)
+        self.hidden_sizes = hidden_sizes
+        self.last_rnn_size = hidden_sizes[-1]
+        self.num = num
+        self.Tc = Tc
+
+    def build(self, input_shape):
+        # input_shape is <batch_size, Tc, hidden_size>
+        Tc = input_shape[1]
+        # hidden size equals self.last_rnn_size
+        hidden_size = input_shape[2]
+        self.v = self.add_weight(shape=(self.Tc, 1),
+                                 initializer=TruncatedNormal(stddev=0.1),
+                                 name="att_v")
+        self.w = self.add_weight(shape=(self.last_rnn_size, self.Tc),
+                                 initializer=TruncatedNormal(stddev=0.1),
+                                 name="att_w")
+        self.u = self.add_weight(shape=(self.Tc, self.Tc),
+                                 initializer=TruncatedNormal(stddev=0.1),
+                                 name="att_u")
+        self.rnns.build(input_shape=[self.last_rnn_size])
+        self.built = True
+
+    def call(self, input):
+        # print(input.shape)
+        batch_size = tf.shape(input)[0]
+        res_hstates = tf.TensorArray(tf.float32, self.num)
+        for k in range(self.num):
+            # <batch_size, en_conv_hidden_size, Tc>
+            attr_input = tf.transpose(input[:, k], perm=[0, 2, 1])
+
+            # <batch_size, last_rnn_hidden_size>
+            # s_state = self.rnns.zero_state(self.batch_size, tf.float32)
+
+            s_state = self.rnns.get_initial_state(batch_size=batch_size, dtype=tf.float32)
+            if len(self.hidden_sizes) > 1:
+                h_state = s_state[-1]
+            else:
+                h_state = s_state
+
+            for t in range(self.Tc):
+                # h(t-1) dot attr_w
+                h_part = tf.matmul(h_state, self.w)
+                # en_conv_hidden_size * <batch_size_new, 1>
+                e_ks = tf.TensorArray(tf.float32, self.last_rnn_size)
+                _, output = tf.while_loop(
+                    lambda i, _: tf.less(i, self.last_rnn_size),
+                    lambda i, output_ta: (i + 1, output_ta.write(i, tf.matmul(
+                        tf.tanh(h_part + tf.matmul(attr_input[:, i], self.u)), self.v))),
+                    [0, e_ks])
+                # <batch_size, en_conv_hidden_size, 1>
+                e_ks = tf.transpose(output.stack(), perm=[1, 0, 2])
+                e_ks = tf.reshape(e_ks, shape=[-1, self.last_rnn_size])
+
+                # <batch_size, en_conv_hidden_size>
+                a_ks = tf.nn.softmax(e_ks)
+
+                x_t = tf.matmul(tf.expand_dims(attr_input[:, :, t], -2), tf.matrix_diag(a_ks))
+                # <batch_size, en_conv_hidden_size>
+                x_t = tf.reshape(x_t, shape=[-1, self.last_rnn_size])
+
+                h_state, s_state = self.rnns(x_t, s_state)
+
+            res_hstates = res_hstates.write(k, h_state)
+
+        return tf.transpose(res_hstates.stack(), perm=[1, 0, 2])
+
+
 class MTNetKeras:
 
     def __init__(self, name='MTNet'):
@@ -416,6 +505,9 @@ class MTNetKeras:
             linear_pred = 0
         y_pred = Add()([nonlinear_pred, linear_pred])
         self.model = Model(inputs=[long_input, short_input], outputs=y_pred)
+        self.model.compile(loss="mae",
+                           metrics=metrics,
+                           optimizer=tf.keras.optimizers.Adam(lr=self.lr))
 
         return self.model
 
@@ -448,38 +540,48 @@ class MTNetKeras:
         rnn_input = Lambda(lambda x:
                                 K.reshape(x, (-1, num, Tc, self.cnn_hid_size)),)(cnn_out)
 
+        # hidden_sizes, input_keep_prob, output_keep_prob, num, batch_size, Tc
+        output = AttentionRNN(hidden_sizes=self.rnn_hid_sizes,
+                              input_keep_prob=1-self.dropout,
+                              output_keep_prob=1,
+                              num=num,
+                              Tc=Tc,
+                              batch_size=self.batch_size,
+                              name=name + 'attention_rnn')(rnn_input)
+        return output
+
         # rnn inputs
         # <batch_size, n, conv_out, en_conv_hidden_size>
         # rnn_input = Reshape((num, Tc, self.cnn_hid_size), name="first_reshape_{}".format(np.random.random_integers(0, 100)))(cnn_out)
 
-        rnn_cells = [GRUCell(h_size, activation="relu", dropout=self.dropout)
-                     for h_size in self.rnn_hid_sizes]
-        test_cell = GRUCell(self.last_rnn_size, activation="relu", dropout=self.dropout)
-        # output dropout of GRUCell is omitted since the output_keep_prob is 1 in all configs.
-        # rnn_cell = StackedRNNCells(rnn_cells)
-        # attention_rnn_cell = AttentionCellWrapper(test_cell)
-        # attention_rnn = RNN(attention_rnn_cell)
-
-        attention_rnn = AttentionRNNWrapper(RNN(rnn_cells),
-                                            weight_initializer=TruncatedNormal(stddev=0.1))
-
-        outputs = []
-        for i in range(num):
-            input_i = rnn_input[:, i]
-            # input_i = (batch, conv_hid_size, Tc)
-            input_i = Permute((2, 1), input_shape=[Tc, self.cnn_hid_size])(input_i)
-            # output = (batch, last_rnn_hid_size)
-            output_i = attention_rnn(input_i)
-            # output = (batch, 1, last_rnn_hid_size)
-            output_i = Reshape((1, -1))(output_i)
-            outputs.append(output_i)
-        if len(outputs) > 1:
-            output = Lambda(lambda x: concatenate(x, axis=1))(outputs)
-            # print(output.shape)
-        else:
-            output = outputs[0]
-        # encoder_model = Model(input, output, name='Encoder' + name)
-        return output
+        # rnn_cells = [GRUCell(h_size, activation="relu", dropout=self.dropout)
+        #              for h_size in self.rnn_hid_sizes]
+        # test_cell = GRUCell(self.last_rnn_size, activation="relu", dropout=self.dropout)
+        # # output dropout of GRUCell is omitted since the output_keep_prob is 1 in all configs.
+        # # rnn_cell = StackedRNNCells(rnn_cells)
+        # # attention_rnn_cell = AttentionCellWrapper(test_cell)
+        # # attention_rnn = RNN(attention_rnn_cell)
+        #
+        # attention_rnn = AttentionRNNWrapper(RNN(rnn_cells),
+        #                                     weight_initializer=TruncatedNormal(stddev=0.1))
+        #
+        # outputs = []
+        # for i in range(num):
+        #     input_i = rnn_input[:, i]
+        #     # input_i = (batch, conv_hid_size, Tc)
+        #     input_i = Permute((2, 1), input_shape=[Tc, self.cnn_hid_size])(input_i)
+        #     # output = (batch, last_rnn_hid_size)
+        #     output_i = attention_rnn(input_i)
+        #     # output = (batch, 1, last_rnn_hid_size)
+        #     output_i = Reshape((1, -1))(output_i)
+        #     outputs.append(output_i)
+        # if len(outputs) > 1:
+        #     output = Lambda(lambda x: concatenate(x, axis=1))(outputs)
+        #     # print(output.shape)
+        # else:
+        #     output = outputs[0]
+        # # encoder_model = Model(input, output, name='Encoder' + name)
+        # return output
 
     def _gen_hist_inputs(self, x):
         long_term = np.reshape(x[:, : self.time_step * self.long_num],
@@ -503,7 +605,7 @@ class MTNetKeras:
             metrics = ['mean_absolute_error', tf.keras.metrics.RootMeanSquaredError()]
         self.config = config
         self._get_configs()
-        x, y, validation_data = self._pre_processing(x, y, validation_data)
+        # x, y, validation_data = self._pre_processing(x, y, validation_data)
         # if model is not initialized, __build the model
         if self.model is None:
             st = time.time()
@@ -511,12 +613,20 @@ class MTNetKeras:
             end = time.time()
             print("Build model took {}s".format(end - st))
 
-        self.model.compile(loss="mae",
-                           metrics=metrics,
-                           optimizer=tf.keras.optimizers.Adam(lr=self.lr))
+        # st = time.time()
+        # self.model.compile(loss="mae",
+        #                    metrics=metrics,
+        #                    optimizer=tf.keras.optimizers.Adam(lr=self.lr))
+        # print("Compile model took {}s".format(time.time() - st))
+        st = time.time()
         hist = self.model.fit(x, y, validation_data=validation_data,
                               batch_size=self.batch_size,
                               epochs=epochs)
+        #
+        # hist = self.model.fit_generator(generator=train_data,
+        #                                 validation_data=validation_data,
+        #                                 )
+        print("Fit model took {}s".format(time.time() - st))
         if validation_data is None:
             # get train metrics
             # results = self.model.evaluate(x, y)
@@ -537,8 +647,9 @@ class MTNetKeras:
         return [Evaluator.evaluate(m, y, y_pred) for m in metric]
 
     def predict(self, x, mc=False):
-        input_x = self._gen_hist_inputs(x)
-        return self.model.predict(input_x)
+        # input_x = self._gen_hist_inputs(x)
+        # return self.model.predict(input_x)
+        return self.model.predict(x)
 
     def save(self, model_path):
         return self.model.save(model_path)
