@@ -9,6 +9,7 @@ import os
 
 import numpy as np
 import tensorflow as tf
+import time
 from tensorflow.python import debug as tf_debug
 
 # GPU setting
@@ -143,6 +144,7 @@ def run_one_config(config):
 
     # build model
     with tf.Session() as sess:
+        init_time = time.time()
         #sess = tf_debug.LocalCLIDebugWrapperSession(sess)
         model = MTNet(config)
         saver = tf.train.Saver()
@@ -169,6 +171,8 @@ def run_one_config(config):
 
         # indicate the score name
         score1_name, score2_name= SCORE_TYPES[score_type_index]
+        st = time.time()
+        print("init time is ", st - init_time)
 
         for i in range(epochs):
             # decay lr
@@ -177,15 +181,16 @@ def run_one_config(config):
             # train one epoch
             run_one_epoch(sess, model, train_batch_data, train_writer, ds_handler, i, True)
             # evaluate
-            if i % 5 == 0:
+            if i % 1 == 0:
                 loss, scope1, score2 = run_one_epoch(sess, model, valid_batch_data, test_writer, ds_handler, i, False)
                 if best_score > score2:
                     best_score = score2
                     # save model
                     saver.save(sess, model_path)
-                    print('Epoch', i, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
+                    print('Epoch', i + 1, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
 
         print('---------Best score:', score2_name, ':', best_score)
+        print("fit time is", time.time() - st)
 
     # free default graph
     tf.reset_default_graph()
