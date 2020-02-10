@@ -4,6 +4,7 @@ from tensorflow.keras.models import Model
 from tensorflow.keras.layers import *
 from tensorflow.keras.initializers import TruncatedNormal, Constant
 import tensorflow.keras.backend as K
+import math
 
 # from zoo.automl.common.util import *
 # from zoo.automl.common.metrics import Evaluator
@@ -13,111 +14,16 @@ import tensorflow.keras.backend as K
 # from tensorflow.python.ops import math_ops
 import tensorflow as tf
 # _Linear = core_rnn_cell._Linear
-
-
-class MyAttentionCellWrapper(Layer):
-
-    def __init__(self,
-                 cell,
-                 attn_length,
-                 attn_size=None,
-                 attn_vec_size=None,
-                 input_size=None,
-                 state_is_tuple=True,
-                 **kwargs):
-        super(MyAttentionCellWrapper, self).__init__(**kwargs)
-        self._cell = cell
-        self._attn_length = attn_length
-        if attn_size is None:
-            self._attn_size = cell.output_shape[-1]
-        if attn_vec_size is None:
-            self._attn_vec_size = attn_size
-
-        if attn_size is None:
-            attn_size = cell.output_size
-        if attn_vec_size is None:
-            attn_vec_size = attn_size
-        self._state_is_tuple = state_is_tuple
-        self._cell = cell
-        self._attn_vec_size = attn_vec_size
-        self._input_size = input_size
-        self._attn_size = attn_size
-        self._attn_length = attn_length
-        self._linear1 = None
-        self._linear2 = None
-        self._linear3 = None
-
-    def build(self, input_shape):
-        self.k = self.add_weight(
-            shape=(1, 1, self._attn_size, self._attn_vec_size),
-            name='k')
-        self.v = self.add_weight(
-            shape=(1, 1, self._attn_size, self._attn_vec_size),
-            name='v'
-        )
-
-    def call(self, inputs, state):
-        """Long short-term memory cell with attention (LSTMA)."""
-        if self._state_is_tuple:
-            state, attns, attn_states = state
-        else:
-            states = state
-            state = array_ops.slice(states, [0, 0], [-1, self._cell.state_size])
-            attns = array_ops.slice(states, [0, self._cell.state_size],
-                                    [-1, self._attn_size])
-            attn_states = array_ops.slice(
-                states, [0, self._cell.state_size + self._attn_size],
-                [-1, self._attn_size * self._attn_length])
-        attn_states = array_ops.reshape(attn_states,
-                                        [-1, self._attn_length, self._attn_size])
-        input_size = self._input_size
-        if input_size is None:
-            input_size = inputs.get_shape().as_list()[1]
-        if self._linear1 is None:
-            self._linear1 = _Linear([inputs, attns], input_size, True)
-        inputs = self._linear1([inputs, attns])
-        cell_output, new_state = self._cell(inputs, state)
-        if self._state_is_tuple:
-            new_state_cat = array_ops.concat(nest.flatten(new_state), 1)
-        else:
-            new_state_cat = new_state
-        new_attns, new_attn_states = self._attention(new_state_cat, attn_states)
-        with vs.variable_scope("attn_output_projection"):
-            if self._linear2 is None:
-                self._linear2 = _Linear([cell_output, new_attns], self._attn_size, True)
-            output = self._linear2([cell_output, new_attns])
-        new_attn_states = array_ops.concat(
-            [new_attn_states, array_ops.expand_dims(output, 1)], 1)
-        new_attn_states = array_ops.reshape(
-            new_attn_states, [-1, self._attn_length * self._attn_size])
-        new_state = (new_state, new_attns, new_attn_states)
-        if not self._state_is_tuple:
-            new_state = array_ops.concat(list(new_state), 1)
-        return output, new_state
-
-    def _attention(self, query, attn_states):
-        conv2d = nn_ops.conv2d
-        reduce_sum = math_ops.reduce_sum
-        softmax = nn_ops.softmax
-        tanh = math_ops.tanh
-        hidden = array_ops.reshape(attn_states,
-                                   [-1, self._attn_length, 1, self._attn_size])
-        hidden_features = conv2d(hidden, self.k, [1, 1, 1, 1], "SAME")
-        if self._linear3 is None:
-            self._linear3 = _Linear(query, self._attn_vec_size, True)
-        y = self._linear3(query)
-        y = array_ops.reshape(y, [-1, 1, 1, self._attn_vec_size])
-        s = reduce_sum(self.v * tanh(hidden_features + y), [2, 3])
-        a = softmax(s)
-        d = reduce_sum(
-            array_ops.reshape(a, [-1, self._attn_length, 1, 1]) * hidden, [1, 2])
-        new_attns = array_ops.reshape(d, [-1, self._attn_size])
-        new_attn_states = array_ops.slice(attn_states, [0, 1, 0], [-1, -1, -1])
-        return new_attns, new_attn_states
+# from zoo.automl.common.util import *
+# from zoo.automl.common.metrics import Evaluator
+# import pandas as pd
+# from zoo.automl.model.abstract import BaseModel
 
 
 class AttentionRNNWrapper(Wrapper):
     """
+        The AttentionRNNWrapper is a modified version of
+        https://github.com/zimmerrol/keras-utility-layer-collection/blob/master/kulc/attention.py
         The idea of the implementation is based on the paper:
             "Effective Approaches to Attention-based Neural Machine Translation" by Luong et al.
         This layer is an attention layer, which can be wrapped around arbitrary RNN layers.
@@ -429,7 +335,6 @@ class MTNetKeras:
 
         self.feature_num = self.config.D
         self.output_dim = self.config.K
-
         # self.time_step = config.get("time_step", 1)
         # self.long_num = config.get("long_num", 7)
         # self.ar_window = config.get("ar_window", 1)
@@ -505,9 +410,25 @@ class MTNetKeras:
             linear_pred = 0
         y_pred = Add()([nonlinear_pred, linear_pred])
         self.model = Model(inputs=[long_input, short_input], outputs=y_pred)
+        # lr decay
+        # def lr_scheduler(epoch, r):
+        #     max_lr = 0.03
+        #     min_lr = 0.0001
+        #     lr = min_lr + (max_lr - min_lr) * math.exp(-epoch / 60)
+        #     return lr
+        # callbacks = [tf.keras.callbacks.LearningRateScheduler(lr_scheduler, verbose=1)]
+        initial_lr = 0.003
+        rate = math.exp(-1/60)
+        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+            initial_lr,
+            decay_steps = 249,
+            decay_rate=rate,
+            staircase=True
+        )
+
         self.model.compile(loss="mae",
                            metrics=metrics,
-                           optimizer=tf.keras.optimizers.Adam(lr=self.lr))
+                           optimizer=tf.keras.optimizers.Adam(learning_rate=lr_schedule))
 
         return self.model
 
@@ -601,6 +522,7 @@ class MTNetKeras:
 
     def fit_eval(self, x, y, validation_data=None, mc=False, metrics=None,
                  epochs=100, verbose=0, config=None):
+        # x, y, validation_data = self._pre_processing(x, y, validation_data)
         if metrics is None:
             metrics = ['mean_absolute_error', tf.keras.metrics.RootMeanSquaredError()]
         self.config = config
@@ -644,15 +566,16 @@ class MTNetKeras:
         :return: a list of metric evaluation results
         """
         y_pred = self.predict(x)
-        return [Evaluator.evaluate(m, y, y_pred) for m in metric]
+        if y_pred.shape[1] == 1:
+            multioutput = 'uniform_average'
+        # y = np.squeeze(y, axis=2)
+        return [Evaluator.evaluate(m, y, y_pred, multioutput=multioutput) for m in metrics]
 
     def predict(self, x, mc=False):
         # input_x = self._gen_hist_inputs(x)
         # return self.model.predict(input_x)
         return self.model.predict(x)
 
-    def save(self, model_path):
-        return self.model.save(model_path)
 
     def _get_optional_configs(self):
         return {

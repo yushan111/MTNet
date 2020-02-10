@@ -1,4 +1,4 @@
-from models.MTNet_keras_1 import MTNet
+from models.MTNet import MTNet
 # from models.MTNet import *
 from models.MTNet_keras import MTNetKeras
 from configs.config import *
@@ -181,8 +181,8 @@ def run_one_config(config):
     epochs = 50
 
     # learning rate decay
-    max_lr = 0.001
-    min_lr = 0.001
+    max_lr = 0.003
+    min_lr = 0.0001
     decay_epochs = 60
 
     # build model
@@ -274,21 +274,23 @@ def run_keras(config):
     print('----------Train Config:', make_config_string(config), '. Total epochs:', epochs)
     score1_name, score2_name = SCORE_TYPES[score_type_index]
     best_score = float('inf')
-    for i in range(epochs//5):
+
+    for i in range(epochs):
         # decay lr
         config.lr = min_lr + (max_lr - min_lr) * math.exp(-i / decay_epochs)
         val_loss = model.fit_eval([train_x, train_q], train_y,
                                   validation_data=([val_x, val_q], val_y),
-                                  epochs=5, config=config)
-        score1, score2 = evaluate(model, ([train_x, train_q], train_y), ds_handler,
+                                  epochs=1, config=config)
+        score1, score2 = evaluate(model, ([val_x, val_q], val_y), ds_handler,
                                   score_type_index)
+
         if best_score > score2:
             best_score = score2
             # save model
             # model.save(model_path)
-            print('Epoch', (i + 1)*5, 'Test Loss:', val_loss,
-                  score1_name, ':', score1,
-                  score2_name, ':', score2)
+        print('Epoch', (i + 1), 'Test Loss:', val_loss,
+              score1_name, ':', score1,
+              score2_name, ':', score2)
 
     print('---------Best score:', score2_name, ':', best_score)
 
