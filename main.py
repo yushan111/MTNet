@@ -1,3 +1,5 @@
+import time
+
 from models.MTNet import MTNet
 # from models.MTNet import *
 from models.MTNet_keras import MTNetKeras
@@ -19,13 +21,21 @@ from tensorflow.python import debug as tf_debug
 SCORE_TYPES = [['MAE', 'RMSE'], ['CORR', 'RSE']]
 
 
-CONFIG = BJpmConfig
-DS_HANDLER = BJPMDataset
-score_type_index = 0
+# CONFIG = BJpmConfig
+# DS_HANDLER = BJPMDataset
+# score_type_index = 0
 
 # CONFIG = TaxiNYConfig
 # DS_HANDLER = TaxiNYDataset
 # score_type_index = 1
+
+# CONFIG = SolarEnergyConfig
+# DS_HANDLER = SolarEnergyDataset
+# score_type_index = 1
+
+CONFIG = BikeNYCConfig
+DS_HANDLER = BikeNYCDataset
+score_type_index = 1
 
 
 is_train = True
@@ -213,9 +223,11 @@ def run_one_config(config):
 
         # indicate the score name
         score1_name, score2_name= SCORE_TYPES[score_type_index]
-
+        print("epoch,test_loss," + score1_name +","+ score2_name)
+        fit_time = []
         for i in range(epochs):
             # decay lr
+            st = time.time()
             config.lr = min_lr + (max_lr - min_lr) * math.exp(-i/decay_epochs)
 
             # train one epoch
@@ -228,10 +240,13 @@ def run_one_config(config):
                     best_score = score2
                     # save model
                     # saver.save(sess, model_path)
-                print('Epoch', i + 1, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
-
+                print("{},{},{},{}".format(i + 1, loss, scope1, score2))
+                # print('Epoch', i + 1, 'Test Loss:', loss, score1_name,':', scope1, score2_name, ':', score2)
+            # print("fit one epoch used {}s".format(time.time() - st))
+            if i != 0:
+                fit_time.append(time.time() - st)
         print('---------Best score:', score2_name, ':', best_score)
-
+        print("---------Average fit time:", sum(fit_time)/len(fit_time))
     # free default graph
     tf.reset_default_graph()
 
@@ -274,8 +289,10 @@ def run_keras(config):
     print('----------Train Config:', make_config_string(config), '. Total epochs:', epochs)
     score1_name, score2_name = SCORE_TYPES[score_type_index]
     best_score = float('inf')
-
+    print("epoch,test_loss," + score1_name +","+ score2_name)
+    fit_time = []
     for i in range(epochs):
+        st = time.time()
         # decay lr
         config.lr = min_lr + (max_lr - min_lr) * math.exp(-i / decay_epochs)
         val_loss = model.fit_eval([train_x, train_q], train_y,
@@ -288,11 +305,16 @@ def run_keras(config):
             best_score = score2
             # save model
             # model.save(model_path)
-        print('Epoch', (i + 1), 'Test Loss:', val_loss,
-              score1_name, ':', score1,
-              score2_name, ':', score2)
+        print("{},{},{},{}".format(i+1, val_loss, score1, score2))
+        # print('Epoch', (i + 1), 'Test Loss:', val_loss,
+        #       score1_name, ':', score1,
+        #       score2_name, ':', score2)
+        # print("fit one epoch used {}s".format(time.time() - st))
+        if i != 0:
+            fit_time.append(time.time() - st)
 
     print('---------Best score:', score2_name, ':', best_score)
+    print("---------Average fit time:", sum(fit_time) / len(fit_time))
 
 
 if __name__ == '__main__':
@@ -305,5 +327,5 @@ if __name__ == '__main__':
         for en_rnn_hidden_sizes in [[32, 32], [32, 64]]:
             config.en_rnn_hidden_sizes = en_rnn_hidden_sizes
 
-            # run_keras(config)
-            run_one_config(config)
+            run_keras(config)
+            # run_one_config(config)
